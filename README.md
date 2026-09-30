@@ -1,4 +1,6 @@
-# Toki Link Lab
+# Toki
+
+**Working prototype source:** [Toki app, firmware, protocol and test instructions](docs/TOKI_V2.md). The original text below documents the earlier BLE-only probe and remains useful for diagnosing the radio link. The full firmware is `firmware/Toki/Toki.ino`; the Expo app is in `mobile/`.
 
 This is the **connection-first** test for Toki. It keeps the owner's existing `test.ino` intact. The probe firmware exposes a small BLE GATT service. Both the browser dashboard and a minimal React Native app connect, read protocol information, send a random challenge, check the exact reply, ping, and display live device notifications. The ESP32 prints the same meaningful events to USB serial at 115200 baud.
 
