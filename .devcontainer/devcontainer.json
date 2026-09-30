@@ -1,0 +1,12 @@
+{
+  "name": "Toki Link Lab",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Toki BLE dashboard",
+      "onAutoForward": "notify"
+    }
+  },
+  "postStartCommand": "nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory web >/tmp/toki-link-web.log 2>&1 &"
+}

@@ -1,0 +1,28 @@
+:root { color-scheme: light; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #f4f2ed; color: #282722; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.layout { width: min(720px, 100%); margin: 0 auto; padding: 32px 20px 48px; }
+header { padding: 8px 4px 28px; }
+.wordmark { font-size: 30px; letter-spacing: -1.5px; font-weight: 650; }
+.dot { color: #9c665a; }
+.eyebrow { margin: 30px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.8px; color: #7b7971; }
+h1 { font-size: clamp(28px, 6vw, 42px); font-weight: 500; letter-spacing: -1.2px; margin: 0; }
+header > p:last-child { max-width: 560px; color: #68665f; line-height: 1.6; }
+.card { background: #fffefa; border: 1px solid #dedbd3; border-radius: 14px; padding: 22px; margin: 0 0 16px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h2 { font-size: 18px; font-weight: 570; margin: 0; }
+.status { flex: 0 0 auto; font-size: 12px; border: 1px solid #d8d4cb; border-radius: 99px; padding: 5px 9px; color: #5f5d57; }
+.status.good { color: #325b45; background: #edf5ee; border-color: #bbd3c3; }
+.status.bad { color: #8b423b; background: #fbf0ee; border-color: #e5c7c1; }
+.device-name { font-size: 17px; margin: 22px 0 3px; }
+.detail { font-size: 14px; color: #737169; line-height: 1.5; }
+.actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; }
+button { appearance: none; border: 1px solid #cbc8bf; border-radius: 8px; background: #fffefa; color: #282722; padding: 10px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+button:hover:not(:disabled) { background: #efede7; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #33322e; color: white; border-color: #33322e; }
+button.primary:hover:not(:disabled) { background: #4c4a43; }
+.hint { color: #88867d; font-size: 12px; }
+pre { min-height: 210px; max-height: 380px; overflow: auto; border: 1px solid #e5e2da; background: #f9f8f4; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+footer { color: #8b887e; font-size: 12px; padding: 8px 4px; }
+@media (max-width: 450px) { .section-head { align-items: flex-start; flex-direction: column; } .card { padding: 18px; } }

@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Toki Link Lab",
+    "slug": "toki-link-lab",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.maywank.tokilinklab"
+    },
+    "android": {
+      "package": "com.maywank.tokilinklab",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      ["react-native-ble-manager", { "neverForLocation": true, "bluetoothAlwaysPermission": "Allow Toki Link Lab to connect to Toki." }]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

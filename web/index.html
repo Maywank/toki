@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f2ed" />
+    <title>Toki Link Lab</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="layout">
+      <header>
+        <div class="wordmark">toki<span class="dot">.</span></div>
+        <p class="eyebrow">Connection test</p>
+        <h1>Prove the link first.</h1>
+        <p>Connect to the ESP32, complete a challenge handshake, and watch live device events. Tasks and timer controls come after this works.</p>
+      </header>
+
+      <section class="card" aria-labelledby="connection-title">
+        <div class="section-head">
+          <h2 id="connection-title">Device connection</h2>
+          <span id="status" class="status">Not connected</span>
+        </div>
+        <p id="device-name" class="device-name">No device selected</p>
+        <p id="detail" class="detail">Use Chrome on a computer or Android phone near the powered ESP32.</p>
+        <div class="actions">
+          <button id="connect" class="primary">Connect Toki</button>
+          <button id="disconnect" disabled>Disconnect</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="handshake-title">
+        <div class="section-head">
+          <h2 id="handshake-title">Handshake</h2>
+          <span id="handshake-status" class="status">Waiting</span>
+        </div>
+        <p class="detail">The browser sends a random challenge. Toki must return that exact challenge with protocol version 1.</p>
+        <div class="actions">
+          <button id="handshake" disabled>Run handshake</button>
+          <button id="ping" disabled>Ping device</button>
+        </div>
+        <p id="latency" class="detail">No round trip measured yet.</p>
+      </section>
+
+      <section class="card" aria-labelledby="events-title">
+        <div class="section-head">
+          <h2 id="events-title">Live device log</h2>
+          <span class="hint">BLE notifications · serial mirror</span>
+        </div>
+        <div class="actions">
+          <button id="save-log">Download log</button>
+          <button id="clear-log">Clear</button>
+        </div>
+        <pre id="log" role="log" aria-live="polite"></pre>
+      </section>
+
+      <footer>Connection probe v1 · No task data is sent or stored.</footer>
+    </main>
+  </body>
+</html>
