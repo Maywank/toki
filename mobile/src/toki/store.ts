@@ -21,6 +21,7 @@ export type DeviceState = {
   otaIp?: string;
   networkIp?: string;
   firmware?: string;
+  audioReady?: boolean;
   chip?: string;
   flashBytes?: number;
 };
@@ -31,14 +32,40 @@ export type Saved = {
   syncedIds: string[];
   deviceId: string | null;
   syncedSignature: string;
+  onboardingCompleted?: boolean;
+  draft?: string;
+  reminderMinutes?: 0 | 5 | 10;
 };
 
 export const emptySaved: Saved = { tasks: [], revision: 0, syncedIds: [], deviceId: null, syncedSignature: '' };
 export const emptyDevice: DeviceState = { revision: 0, count: 0, selected: 0, doneMask: 0, phase: 'I', elapsedSeconds: 0 };
 
+export function restoreSaved(raw: string | null): Saved {
+  if (!raw) return { ...emptySaved, tasks: [], syncedIds: [] };
+  const data = JSON.parse(raw);
+  const fail = () => { throw new Error('Stored tasks could not be read. Your saved data has been kept.'); };
+  if (!data || !Array.isArray(data.tasks)) return fail();
+  const tasks = data.tasks.map((task: Task) => {
+    if (!task || typeof task.id !== 'string' || typeof task.title !== 'string' || !Number.isFinite(task.order) || !Number.isFinite(task.createdAt) || ![1, 2, 3].includes(task.priority)) return fail();
+    const seconds = task.timeSpentSeconds ?? 0; // Earlier task records had minutes but no elapsed time.
+    if (!Number.isFinite(seconds) || seconds < 0) return fail();
+    return { ...task, timeSpentSeconds: seconds };
+  });
+  const revision = data.revision ?? 0, syncedIds = data.syncedIds ?? [];
+  if (!Number.isInteger(revision) || revision < 0 || revision > 65535 || !Array.isArray(syncedIds) || syncedIds.length > 4 || syncedIds.some((id: unknown) => typeof id !== 'string')) return fail();
+  if (data.deviceId != null && typeof data.deviceId !== 'string') return fail();
+  if (data.draft != null && typeof data.draft !== 'string') return fail();
+  if (data.reminderMinutes != null && ![0, 5, 10].includes(data.reminderMinutes)) return fail();
+  return { ...emptySaved, ...data, tasks, revision, syncedIds };
+}
+
 export function sortTasks(tasks: Task[]) {
   return [...tasks].filter((task) => !task.completedAt)
     .sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
+}
+
+export function reorderOpenTasks(tasks: Task[], ids: string[]) {
+  return tasks.map((task) => ids.includes(task.id) ? { ...task, order: ids.indexOf(task.id) } : task);
 }
 
 export function queueSignature(tasks: Task[]) { return JSON.stringify(sortTasks(tasks).slice(0, 4).map((task) => [task.id, deviceTitle(task.title)])); }

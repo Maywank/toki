@@ -5,7 +5,8 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <GxEPD2_3C.h>
-#include <Fonts/FreeMonoBold9pt7b.h>
+#include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 #include <ESP_I2S.h>
 #include "Ota.h"
 
@@ -42,10 +43,12 @@ volatile bool connected = false;
 BLEServer *server = nullptr;
 BLECharacteristic *events = nullptr;
 QueueHandle_t commands = nullptr;
-struct DisplaySnapshot { SavedQueue data; char phase; uint32_t seconds; bool done; bool updating; };
+struct DisplaySnapshot { SavedQueue data; char phase; uint32_t seconds; bool done; bool updating; bool linked; };
 QueueHandle_t displayRequests = nullptr;
 GxEPD2_3C<GxEPD2_290_C90c, GxEPD2_290_C90c::HEIGHT> display(GxEPD2_290_C90c(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
 I2SClass audio;
+volatile bool audioReady = false;
+QueueHandle_t audioRequests = nullptr;
 
 void pauseBleForUpload() {
   if (otaBlePaused) return;
@@ -106,25 +109,42 @@ void sendState() {
   delay(20); send("CB:" + String(FIRMWARE_VERSION));
   delay(20); send("CI:" + String(ESP.getChipModel()));
   delay(20); send("CF:" + String(ESP.getFlashChipSize()));
+  delay(20); send("CA:" + String(audioReady ? 1 : 0));
   delay(20); send("K:R");
 }
-void beep(int hz, int ms) {
+bool beep(int hz, int ms) {
   const int sampleRate = 16000;
   const int count = sampleRate * ms / 1000;
   int16_t stereo[128 * 2];
   for (int base = 0; base < count; base += 128) {
     int batch = min(128, count - base);
     for (int i = 0; i < batch; ++i) {
-      int16_t value = (int16_t)(6500.0f * sinf(2.0f * PI * hz * (base + i) / sampleRate));
+      float envelope = min(1.0f, min((base + i) / 160.0f, (count - base - i) / 160.0f));
+      int16_t value = (int16_t)(6500.0f * envelope * sinf(2.0f * PI * hz * (base + i) / sampleRate));
       stereo[2 * i] = value; stereo[2 * i + 1] = value;
     }
-    audio.write((const uint8_t *)stereo, batch * 2 * sizeof(int16_t));
+    size_t bytes = batch * 2 * sizeof(int16_t);
+    if (audio.write((const uint8_t *)stereo, bytes) != bytes) return false;
   }
+  return true;
 }
-void chime(bool finished) {
-  beep(finished ? 880 : 523, 110);
-  delay(35);
-  beep(finished ? 1175 : 784, 170);
+bool requestChime(bool finished) {
+  uint8_t cue = finished ? 1 : 0;
+  return audioReady && audioRequests && xQueueSend(audioRequests, &cue, 0) == pdTRUE;
+}
+void audioWorker(void *) {
+  uint8_t cue;
+  for (;;) {
+    if (xQueueReceive(audioRequests, &cue, portMAX_DELAY) != pdTRUE) continue;
+    if (!audioReady) continue;
+    bool ok = beep(cue ? 880 : 523, 110);
+    vTaskDelay(pdMS_TO_TICKS(35));
+    ok = ok && beep(cue ? 1175 : 784, 170);
+    // Flush a short silence so a DMA buffer cannot repeat the last tone tail.
+    int16_t silence[256] = {};
+    ok = ok && audio.write((const uint8_t *)silence, sizeof(silence)) == sizeof(silence);
+    if (!ok) { audioReady = false; Serial.println("ERROR: I2S speaker write failed"); }
+  }
 }
 void setPhase(Phase next) {
   phase = next;
@@ -134,15 +154,18 @@ void setPhase(Phase next) {
 void startTask(int slot, int minutes) {
   if (!validSlot(slot) || (minutes != 0 && minutes != 5 && minutes != 10 && minutes != 15)) { err("BAD_TASK"); return; }
   if (phase == RUNNING || receiving || otaActive) { err("BUSY"); return; }
-  queue.selected = slot; saveQueue();
+  uint8_t previous = queue.selected; queue.selected = slot;
+  if (!saveQueue()) { queue.selected = previous; err("SAVE_FAILED"); return; }
   timerStarted = millis(); lastElapsedSave = timerStarted; lastMinutePaint = elapsedSeconds() / 60;
   lastDoneSlot = -1;
   setPhase(RUNNING);
+  if (!requestChime(false)) Serial.println("ERROR: Start cue unavailable");
   send("K:Z:" + String(slot));
 }
 void completeTask(int slot) {
   if (!validSlot(slot)) { err("BAD_TASK"); return; }
   if (phase == RUNNING && slot != queue.selected) { err("ACTIVE_TASK"); return; }
+  SavedQueue previous = queue; unsigned long previousStarted = timerStarted;
   if (phase == RUNNING && slot == queue.selected) {
     queue.tasks[slot].elapsedSeconds += (millis() - timerStarted) / 1000;
     timerStarted = millis();
@@ -150,9 +173,10 @@ void completeTask(int slot) {
   queue.doneMask |= (1 << slot);
   String id = queue.tasks[slot].id;
   queue.selected = slot;
-  saveQueue();
+  if (!saveQueue()) { queue = previous; timerStarted = previousStarted; err("SAVE_FAILED"); return; }
   phase = IDLE;
   completionQueue = queue;
+  if (!requestChime(true)) Serial.println("ERROR: Completion cue unavailable");
   lastDoneSlot = slot; donePaintUntil = millis() + 25000;
   send("X:" + id + ":" + String(queue.tasks[slot].elapsedSeconds)); delay(20);
   send("D:" + id);
@@ -163,16 +187,56 @@ void completeTask(int slot) {
 }
 void stopTask() {
   if (phase != RUNNING || queue.selected >= queue.count) { err("NOT_RUNNING"); return; }
+  SavedQueue previous = queue; unsigned long previousStarted = timerStarted;
   queue.tasks[queue.selected].elapsedSeconds += (millis() - timerStarted) / 1000;
-  timerStarted = millis(); saveQueue();
+  timerStarted = millis();
+  if (!saveQueue()) { queue = previous; timerStarted = previousStarted; err("SAVE_FAILED"); return; }
   setPhase(IDLE); send("K:Y"); sendState();
 }
 void drawScreen() {
   screenDirty = false;
   if (!displayRequests) return;
   bool showDone = lastDoneSlot >= 0 && phase == IDLE && !otaActive;
-  DisplaySnapshot snapshot = {showDone ? completionQueue : queue, (char)phase, (uint32_t)elapsedSeconds(), showDone, otaActive};
+  DisplaySnapshot snapshot = {showDone ? completionQueue : queue, (char)phase, (uint32_t)elapsedSeconds(), showDone, otaActive, connected};
   xQueueOverwrite(displayRequests, &snapshot);
+}
+uint16_t textWidth(const String &text) {
+  int16_t x, y; uint16_t w, h;
+  display.getTextBounds(text.c_str(), 0, 0, &x, &y, &w, &h);
+  return w;
+}
+void centeredText(const String &text, int baseline) {
+  int16_t x, y; uint16_t w, h;
+  display.getTextBounds(text.c_str(), 0, baseline, &x, &y, &w, &h);
+  display.setCursor((display.width() - w) / 2 - x, baseline); display.print(text);
+}
+void taskTitle(const char *title) {
+  String full(title), first, second;
+  display.setFont(&FreeSans12pt7b);
+  if (textWidth(full) <= 280) { centeredText(full, 72); return; }
+  // Prefer a word boundary with balanced line widths. Only split within a word
+  // when no boundary fits the two-line screen (the ASCII transport is 32 bytes).
+  for (const GFXfont *font : {&FreeSans12pt7b, &FreeSans9pt7b}) {
+    display.setFont(font);
+    int best = -1, score = 32767;
+    for (unsigned split = 1; split < full.length(); ++split) {
+      if (full[split] != ' ') continue;
+      String a = full.substring(0, split), b = full.substring(split + 1);
+      if (!a.length() || !b.length()) continue;
+      int aw = textWidth(a), bw = textWidth(b);
+      if (aw <= 280 && bw <= 280 && abs(aw - bw) < score) { best = split; score = abs(aw - bw); }
+    }
+    if (best >= 0) { first = full.substring(0, best); second = full.substring(best + 1); break; }
+    if (font == &FreeSans9pt7b) {
+      for (unsigned split = 1; split < full.length(); ++split) {
+        String a = full.substring(0, split), b = full.substring(split);
+        int aw = textWidth(a), bw = textWidth(b);
+        if (aw <= 280 && bw <= 280 && abs(aw - bw) < score) { best = split; score = abs(aw - bw); }
+      }
+      if (best >= 0) { first = full.substring(0, best); second = full.substring(best); }
+    }
+  }
+  centeredText(first, 60); centeredText(second, 88);
 }
 void displayWorker(void *) {
   display.init(115200); display.setRotation(3);
@@ -181,26 +245,42 @@ void displayWorker(void *) {
     if (xQueueReceive(displayRequests, &snapshot, portMAX_DELAY) != pdTRUE) continue;
     display.setFullWindow(); display.firstPage();
     do {
-    display.fillScreen(GxEPD_WHITE);
-    display.setTextColor(GxEPD_BLACK);
-    display.setFont(&FreeMonoBold9pt7b);
-    display.setCursor(8, 20); display.print("toki.");
-    display.setFont(nullptr); display.setTextSize(1);
-    display.setCursor(194, 13);
-    display.print(snapshot.updating ? "WI-FI UPDATE" : snapshot.done ? "DONE" : snapshot.phase == 'R' ? "IN PROGRESS" : "READY");
-    display.drawLine(8, 27, 287, 27, GxEPD_BLACK);
-    for (int slot = 0; slot < snapshot.data.count; ++slot) {
-      int y = 36 + slot * 18;
-      display.drawRect(8, y, 9, 9, GxEPD_BLACK);
-      if (snapshot.data.doneMask & (1 << slot)) { display.drawLine(9, y + 4, 12, y + 7, GxEPD_BLACK); display.drawLine(12, y + 7, 16, y + 1, GxEPD_BLACK); }
-      if (slot == snapshot.data.selected) display.fillTriangle(22, y + 1, 22, y + 8, 27, y + 4, GxEPD_BLACK);
-      display.setCursor(33, y + 1); display.print(snapshot.data.tasks[slot].title);
-    }
-    if (!snapshot.data.count) { display.setCursor(8, 48); display.print("Write your first task in the Toki app."); }
-    display.drawLine(8, 109, 287, 109, GxEPD_BLACK); display.setCursor(8, 116);
-    if (snapshot.updating) display.print("Open http://192.168.4.1 on Toki Wi-Fi");
-    else if (snapshot.phase == 'R') { char time[24]; snprintf(time, sizeof(time), "Time spent %lu:%02lu", (unsigned long)snapshot.seconds / 60, (unsigned long)snapshot.seconds % 60); display.print(time); }
-    else display.print(snapshot.done ? "Completed. Choose the next task." : "< Previous    OK Start    Next >");
+      display.fillScreen(GxEPD_WHITE); display.setTextColor(GxEPD_BLACK);
+      display.setFont(nullptr); display.setTextSize(1);
+      display.setCursor(8, 8); display.print("toki");
+      if (snapshot.linked) {
+        // Bluetooth rune: a link indicator, never a proximity indicator.
+        display.drawLine(283, 5, 283, 19, GxEPD_BLACK);
+        display.drawLine(283, 5, 289, 10, GxEPD_BLACK);
+        display.drawLine(289, 10, 277, 16, GxEPD_BLACK);
+        display.drawLine(277, 8, 289, 14, GxEPD_BLACK);
+        display.drawLine(289, 14, 283, 19, GxEPD_BLACK);
+      }
+      if (snapshot.phase == 'R') {
+        display.drawCircle(91, 12, 5, GxEPD_BLACK);
+        display.drawLine(91, 7, 91, 4, GxEPD_BLACK);
+        display.drawLine(89, 4, 93, 4, GxEPD_BLACK);
+        display.drawLine(91, 12, 94, 10, GxEPD_BLACK);
+        display.setCursor(103, 8); display.print(String(snapshot.seconds / 60) + " min");
+      }
+      if (snapshot.updating) {
+        display.setFont(&FreeSans12pt7b); centeredText("Wi-Fi update", 63);
+        display.setFont(nullptr); centeredText("192.168.4.1", 91);
+      } else if (!snapshot.data.count) {
+        display.setFont(&FreeSans12pt7b); centeredText("Room for a task.", 63);
+        display.setFont(nullptr); centeredText("Write in the toki app", 91);
+      } else {
+        taskTitle(snapshot.data.tasks[snapshot.data.selected].title);
+        display.setFont(nullptr);
+        if (snapshot.done) centeredText("Done. A little space again.", 103);
+        else if (snapshot.phase != 'R') centeredText("Tap middle to begin", 103);
+        for (int slot = 0; slot < 4; ++slot) {
+          int x = 124 + slot * 16;
+          if (slot == snapshot.data.selected) display.fillCircle(x, 119, 4, GxEPD_BLACK);
+          else if (slot < snapshot.data.count) display.drawCircle(x, 119, 2, GxEPD_BLACK);
+          else display.drawPixel(x, 119, GxEPD_BLACK);
+        }
+      }
     } while (display.nextPage());
     display.hibernate(); Serial.println("DISPLAY updated");
   }
@@ -216,7 +296,7 @@ void handleCommand(const String &raw) {
   if (raw.startsWith("H:") && hexId(raw.substring(2))) { send("A:" + raw.substring(2) + ":3"); return; }
   if (raw.startsWith("P:") && hexId(raw.substring(2))) { send("Q:" + raw.substring(2)); return; }
   if (raw == "R") { sendState(); return; }
-  if (raw == "C") { chime(false); send("K:C"); return; }
+  if (raw == "C") { if (!requestChime(false)) { err("AUDIO_UNAVAILABLE"); return; } send("K:C"); return; }
   if (raw == "U") {
     if (phase == RUNNING || receiving) { err("BUSY"); return; }
     if (!otaStart()) { err("OTA_UNAVAILABLE"); return; }
@@ -321,8 +401,12 @@ void setup() {
   for (int pin : {32, 33, 27, 14}) { pinMode(pin, OUTPUT); digitalWrite(pin, LOW); }
   otaInit();
   audio.setPins(I2S_BCK, I2S_WS, I2S_DATA);
-  if (!audio.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO))
-    Serial.println("ERROR: I2S audio did not start");
+  audioReady = audio.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+  if (audioReady) {
+    audioRequests = xQueueCreate(4, sizeof(uint8_t));
+    audioReady = audioRequests && xTaskCreatePinnedToCore(audioWorker, "toki-audio", 4096, nullptr, 1, nullptr, 0) == pdPASS;
+  }
+  if (!audioReady) Serial.println("ERROR: I2S audio worker did not start");
   commands = xQueueCreate(24, sizeof(Command));
   displayRequests = xQueueCreate(1, sizeof(DisplaySnapshot));
   xTaskCreatePinnedToCore(displayWorker, "toki-display", 8192, nullptr, 1, nullptr, 1);
@@ -340,11 +424,11 @@ void setup() {
   advertising->addServiceUUID(SERVICE_UUID); advertising->setScanResponse(true); advertising->start();
   Serial.println("TOKI/3 READY; BLE advertising Toki Link; firmware " + String(FIRMWARE_VERSION));
   Serial.printf("CHIP %s; flash %lu; OTA slot %lu\n", ESP.getChipModel(), (unsigned long)ESP.getFlashChipSize(), (unsigned long)otaCapacity());
-  chime(false);
+  requestChime(false);
 }
 void loop() {
   if (connected != previousConnected) {
-    previousConnected = connected;
+    previousConnected = connected; dirtyScreen();
     if (!connected && !otaActive && server) { delay(100); server->startAdvertising(); Serial.println("BLE advertising restarted"); }
     else Serial.println("BLE connected");
   }

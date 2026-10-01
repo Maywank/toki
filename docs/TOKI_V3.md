@@ -4,14 +4,15 @@ The phone holds the full task list. Toki holds four tasks, tracks time and compl
 
 ## Everyday use
 
-- Write a task and press Enter or +. No duration or priority form.
+- In Write, use the multiline space and choose **Add to Tasks**. Drafts are retained; existing tasks live in a separate tab.
 - Hold the handle at the left to drag tasks into order. The first four unfinished tasks sync automatically when connected and idle. Edits made during a task wait until pause/completion.
-- The task menu's **Send next** moves an item to the front. The list order determines priority.
+- Tap a task to edit it, annotate priority (Later / Normal / Important), or **Send next to Toki**. Order determines the queue; priority does not silently reorder it.
 - On the object: left/right selects an unfinished task; middle tap starts tracking time; middle hold for 1.2 seconds marks it done; left hold pauses it. Starting does not itself complete the task.
-- Completion appears in Activity. Time by task combines titles after normalizing case and whitespace; this is exact-title grouping, not semantic inference.
+- Completion appears in **Tasks → Activity**. Time by task combines titles after normalizing case and whitespace; this is exact-title grouping, not semantic inference.
 - The object stores elapsed time on pause/completion and every 30 seconds. Sudden power loss can lose up to the most recent 30 seconds. After a restart the task is paused.
-- Paper and Window are original generated audio loops bundled with the app. Music plays on the phone's selected audio output. The ESP32 plays local I²S chimes; it is not an A2DP speaker. Spotify remote control is not configured.
+- Firmware 3.0.7 restores start/finish I²S chimes and a Device speaker test. Audio runs on a worker and reports initialization/write errors through `CA:`. Historical Paper/Window phone-loop source/assets remain in the repository; the new writing screen does not play phone audio. Device music transport awaits the hardware decision. The ESP32 is not currently an A2DP receiver; Spotify remote control is not configured.
 - RSSI indicates BLE link quality, not reliable distance or user presence.
+- In Device, optional silent return invitations use a five- or ten-minute grace after an observed disconnect or sustained relative weakening. Recovery, pause, completion, update mode and deliberate disconnect cancel them. Background detection is constrained by the phone OS; this does not prove room presence.
 
 ## Hardware and pins
 
@@ -27,7 +28,7 @@ Verified board: ESP32-D0WD-V3 revision 3.1, 4 MB flash, Wi-Fi and Bluetooth.
 
 The home switch is removed. This firmware does not move the stepper because it has no verified position reference. The physical pointer therefore needs a separate agreed calibration strategy before it can be enabled. Display, touch, task timing, completion and BLE remain independent of the motor.
 
-The existing three-colour e-paper driver takes about 20 seconds per full refresh on this prototype. A separate FreeRTOS worker owns the display so that this wait no longer blocks BLE acknowledgements. It renders a landscape four-row list, selected indicator, completion checkboxes, and elapsed time. The display does not refresh every second.
+The existing three-colour e-paper driver takes about 20 seconds per full refresh on this prototype. A separate FreeRTOS worker owns the display so that this wait no longer blocks BLE acknowledgements. It renders one centered task over up to two lines, four position dots, a running timer and a connection indicator. The display does not refresh every second.
 
 ## Firmware installation and OTA
 
@@ -41,7 +42,7 @@ This compiles with `esp32:esp32:esp32:PartitionScheme=min_spiffs`. Each firmware
 
 After that install, power Toki independently; a phone USB cable is unnecessary:
 
-1. Pause/finish the task. In the app's Toki tab choose **Enable Wi-Fi update**. Alternatively hold both outer touch buttons for three seconds while idle.
+1. Pause/finish the task. In the app's Device tab choose **Enable Wi-Fi update**. Alternatively hold both outer touch buttons for three seconds while idle.
 2. Join the `Toki-…` Wi-Fi network using the password shown in the app (also printed on local serial when enabled).
 3. Open `http://192.168.4.1`. Username is `toki`; password is the same device password.
 4. Upload **`Toki.ino.bin`** from `build/toki/`. Do not upload a merged image, bootloader or partitions file. Source `.ino` files must first be compiled to this application `.bin`.
@@ -72,6 +73,7 @@ GATT service `5ce1f1a0-9e7b-4c35-9e1f-42c1ec923001`, command `…3002`, notifica
 | `U` / `u` → `K:U` / `K:u` | Enable / close Wi-Fi maintenance |
 | `WN:` / `WP:` / `WI:` / `WS:` / `WU:` | Maintenance SSID/password/AP address/network address/enabled |
 | `CB:` / `CI:` / `CF:` | Firmware version / chip / flash bytes |
+| `C` → `K:C` or `E:AUDIO_UNAVAILABLE`; `CA:0` / `CA:1` | Queue a speaker test; audio unavailable / initialized |
 
 An acknowledged queue commit is considered saved even if a later readback fails. Refresh waits for `K:R`, not the first fragment. Protocol 2 APKs and protocol 3 firmware are incompatible: install the matching updated APK. App data uses the existing storage key and retains old tasks during migration.
 
@@ -82,8 +84,18 @@ cd mobile
 npm ci
 npx tsc --noEmit
 npx expo lint
+npm test
+npx expo-doctor
 npx expo export --platform android
 npx eas-cli@latest build --platform android --profile preview
 ```
 
 Use Node 24 (the devcontainer is configured for it). The preview APK is self-contained and does not need Metro or Expo Go. Bench helpers require `bleak`, `pyserial` and `requests`; `scripts/test-device.py` is read-only unless `--write-test` is requested, and refuses to replace a nonempty queue. `scripts/test-ota-windows.py` temporarily joins Toki's network, tests an OTA upload and restores the previous Wi-Fi profile. Disconnect the phone before a laptop BLE test.
+
+Hardware-independent speaker/NVS regression: `python3 scripts/test-speaker.py`.
+Existing OTA regression: `python3 scripts/test-ota-timeout.py`.
+Both execute actual firmware functions with fake I/O boundaries; they do not
+verify audible output or physical upload. App 1.2.0 (Android versionCode 3) needs a
+new native APK because splash/notification modules changed. Expo authentication
+is required for EAS; use the existing project and preview profile. A development
+client is useful for editing with Metro, while the preview build runs on its own.
