@@ -12,7 +12,7 @@
 
 // Toki protocol 3. The phone talks directly to this ESP32 over BLE.
 // The current enclosure has no home switch, so the stepper is deliberately unused.
-constexpr int LEFT_BUTTON = 34, SELECT_BUTTON = 35, RIGHT_BUTTON = 21;
+constexpr int LEFT_BUTTON = 34, SELECT_BUTTON = 21, RIGHT_BUTTON = 35;
 constexpr int EPD_CS = 5, EPD_DC = 17, EPD_RST = 16, EPD_BUSY = 4;
 constexpr int I2S_BCK = 26, I2S_WS = 25, I2S_DATA = 22;
 constexpr char SERVICE_UUID[] = "5ce1f1a0-9e7b-4c35-9e1f-42c1ec923001";

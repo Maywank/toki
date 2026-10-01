@@ -10,7 +10,7 @@ The phone holds the full task list. Toki holds four tasks, tracks time and compl
 - On the object: left/right selects an unfinished task; middle tap starts tracking time; middle hold for 1.2 seconds marks it done; left hold pauses it. Starting does not itself complete the task.
 - Completion appears in **Tasks → Activity**. Time by task combines titles after normalizing case and whitespace; this is exact-title grouping, not semantic inference.
 - The object stores elapsed time on pause/completion and every 30 seconds. Sudden power loss can lose up to the most recent 30 seconds. After a restart the task is paused.
-- Firmware 3.0.7 restores start/finish I²S chimes and a Device speaker test. Audio runs on a worker and reports initialization/write errors through `CA:`. Historical Paper/Window phone-loop source/assets remain in the repository; the new writing screen does not play phone audio. Device music transport awaits the hardware decision. The ESP32 is not currently an A2DP receiver; Spotify remote control is not configured.
+- Firmware 3.0.8 restores start/finish I²S chimes and a Device speaker test, and matches the enclosure's center/right touch wiring. Audio runs on a worker and reports initialization/write errors through `CA:`. Historical Paper/Window phone-loop source/assets remain in the repository; the new writing screen does not play phone audio. Device music transport awaits the hardware decision. The ESP32 is not currently an A2DP receiver; Spotify remote control is not configured.
 - RSSI indicates BLE link quality, not reliable distance or user presence.
 - In Device, optional silent return invitations use a five- or ten-minute grace after an observed disconnect or sustained relative weakening. Recovery, pause, completion, update mode and deliberate disconnect cancel them. Background detection is constrained by the phone OS; this does not prove room presence.
 
@@ -20,7 +20,7 @@ Verified board: ESP32-D0WD-V3 revision 3.1, 4 MB flash, Wi-Fi and Bluetooth.
 
 | Function | GPIO |
 | --- | --- |
-| TTP223 left / middle / right, active high | 34 / 35 / 21 |
+| TTP223 left / middle / right, active high | 34 / 21 / 35 |
 | GxEPD2_290_C90c CS / DC / RST / BUSY | 5 / 17 / 16 / 4 |
 | SPI clock / MOSI | 18 / 23 |
 | MAX98357 BCK / WS / DATA | 26 / 25 / 22 |

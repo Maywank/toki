@@ -6,7 +6,7 @@
 #include <Preferences.h>
 
 void pauseBleForUpload();
-constexpr char FIRMWARE_VERSION[] = "3.0.7";
+constexpr char FIRMWARE_VERSION[] = "3.0.8";
 bool otaBlePaused = false;
 WebServer otaWeb(80);
 bool otaActive = false, otaUploading = false, otaUploadAccepted = false;

@@ -5,7 +5,7 @@ Toki brings four tasks onto a physical desk object. The React Native app is its 
 ## Current build
 
 - App 1.2 prototype: separate Write / Tasks / Device tabs, retained writing drafts, task ordering and light priority, first-use guide, original logo and splash, and optional return invitations.
-- Firmware 3.0.7 / TOKI protocol 3: one large task with four carousel positions, timer/link indicators, restored start/finish speaker cues and explicit storage/audio errors. Existing authenticated Wi-Fi uploads and partitions are retained.
+- Firmware 3.0.8 / TOKI protocol 3: one large task with four carousel positions, timer/link indicators, restored start/finish speaker cues and explicit storage/audio errors. Center/right touch GPIOs match the enclosure wiring (21/35). Existing authenticated Wi-Fi uploads and partitions are retained.
 - Verified hardware: ESP32-D0WD-V3 with 4 MB flash. The removed home switch means the motor is currently released and inactive.
 
 **[Use, wiring, OTA, protocol and build instructions](docs/TOKI_V3.md)**
