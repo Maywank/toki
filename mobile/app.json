@@ -2,7 +2,7 @@
   "expo": {
     "name": "Toki",
     "slug": "toki",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -23,7 +23,8 @@
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT"
-      ]
+      ],
+      "versionCode": 2
     },
     "plugins": [
       [
@@ -33,7 +34,16 @@
           "bluetoothAlwaysPermission": "Allow Toki to connect to your desk device."
         }
       ],
-      "expo-router"
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": true
+        }
+      ]
     ],
     "web": {
       "favicon": "./assets/favicon.png"

@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import BleManager from 'react-native-ble-manager';
-import { DeviceState, emptyDevice, emptySaved, newTask, parseFocus, parseVersion, Saved, sortTasks, Task, deviceTitle } from './store';
+import { DeviceState, emptyDevice, emptySaved, newTask, parseElapsed, parseFocus, parseVersion, queueSignature, Saved, sortTasks, Task, deviceTitle } from './store';
 
 const SERVICE = '5ce1f1a0-9e7b-4c35-9e1f-42c1ec923001';
 const COMMAND = '5ce1f1a0-9e7b-4c35-9e1f-42c1ec923002';
@@ -12,9 +12,12 @@ const KEY = 'toki:v2';
 type Found = { id: string; name: string };
 type Waiter = { expected: string[]; seen: Set<string>; resolve: () => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout> };
 type Context = {
-  saved: Saved; device: DeviceState; status: string; found: Found[]; busy: boolean; logs: string[];
-  addTask: (title: string, minutes: 5 | 10 | 15, priority: 1 | 2 | 3) => void;
-  updateTask: (id: string, changes: Partial<Pick<Task, 'priority' | 'minutes' | 'title' | 'order'>>) => void;
+  saved: Saved; device: DeviceState; status: string; found: Found[]; busy: boolean; logs: string[]; syncNotice: string;
+  addTask: (title: string) => void;
+  updateTask: (id: string, changes: Partial<Pick<Task, 'priority' | 'title' | 'order'>>) => void;
+  moveTask: (id: string, direction: -1 | 1) => void;
+  reorderTasks: (ids: string[]) => void;
+  sendNext: (id: string) => void;
   completeLocal: (id: string) => void;
   scan: () => Promise<void>; connect: (id: string) => Promise<void>; disconnect: () => Promise<void>;
   sync: () => Promise<void>; action: (command: string, ack: string) => Promise<void>; refresh: () => Promise<void>;
@@ -31,6 +34,7 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
   const [found, setFound] = useState<Found[]>([]);
   const [busy, setBusy] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [syncNotice, setSyncNotice] = useState('');
   const hydrated = useRef(false);
   const savedRef = useRef(saved);
   const deviceRef = useRef(device);
@@ -39,14 +43,17 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
   const connecting = useRef(false);
   const waiter = useRef<Waiter | null>(null);
   const ready = useRef(false);
+  const autoSyncKey = useRef('');
+  const operation = useRef(false);
+  const syncRef = useRef<() => Promise<void>>(async () => {});
   const connectRef = useRef<(id: string) => Promise<void>>(async () => {});
 
   const log = useCallback((text: string) => setLogs((current) => [`${new Date().toLocaleTimeString()}  ${text}`, ...current].slice(0, 100)), []);
   const patchSaved = useCallback((mutate: (current: Saved) => Saved) => {
-    setSaved((current) => { const next = mutate(current); savedRef.current = next; return next; });
+    const next = mutate(savedRef.current); savedRef.current = next; setSaved(next);
   }, []);
   const patchDevice = useCallback((changes: Partial<DeviceState>) => {
-    setDevice((current) => { const next = { ...current, ...changes }; deviceRef.current = next; return next; });
+    const next = { ...deviceRef.current, ...changes }; deviceRef.current = next; setDevice(next);
   }, []);
   const cancelWaiter = useCallback((reason: string) => {
     if (!waiter.current) return;
@@ -60,11 +67,29 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
     if (completed.length) patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => completed.includes(task.id) && !task.completedAt ? { ...task, completedAt: Date.now() } : task) }));
   }, [patchSaved]);
   const onFrame = useCallback((frame: string) => {
-    log(`DEVICE ${frame}`);
+    log(`DEVICE ${frame.startsWith('WP:') ? 'WP:[hidden]' : frame}`);
     const version = parseVersion(frame);
     if (version) { patchDevice(version); reconcile(version); }
     const focus = parseFocus(frame);
-    if (focus) patchDevice(focus);
+    if (focus) {
+      patchDevice(focus);
+      if (deviceRef.current.revision === savedRef.current.revision) {
+        const id = savedRef.current.syncedIds[deviceRef.current.selected];
+        if (id) patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === id ? { ...task, timeSpentSeconds: Math.max(task.timeSpentSeconds, focus.elapsedSeconds || 0) } : task) }));
+      }
+    }
+    const elapsed = parseElapsed(frame);
+    if (elapsed) {
+      patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === elapsed.id ? { ...task, timeSpentSeconds: Math.max(task.timeSpentSeconds, elapsed.seconds) } : task) }));
+    }
+    if (frame.startsWith('WN:')) patchDevice({ otaName: frame.slice(3) });
+    if (frame.startsWith('WP:')) patchDevice({ otaPassword: frame.slice(3) });
+    if (frame.startsWith('WI:')) patchDevice({ otaIp: frame.slice(3) });
+    if (frame.startsWith('WS:')) patchDevice({ networkIp: frame.slice(3) });
+    if (frame === 'WU:0') patchDevice({ otaName: undefined, otaPassword: undefined, otaIp: undefined, networkIp: undefined });
+    if (frame.startsWith('CB:')) patchDevice({ firmware: frame.slice(3) });
+    if (frame.startsWith('CI:')) patchDevice({ chip: frame.slice(3) });
+    if (frame.startsWith('CF:')) patchDevice({ flashBytes: Number(frame.slice(3)) });
     if (frame.startsWith('D:')) {
       const id = frame.slice(2);
       patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === id && !task.completedAt ? { ...task, completedAt: Date.now() } : task) }));
@@ -72,7 +97,7 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
     const pending = waiter.current;
     if (!pending) return;
     if (frame.startsWith('E:')) { cancelWaiter(frame.slice(2)); return; }
-    const match = pending.expected.find((prefix) => frame.startsWith(prefix));
+    const match = pending.expected.find((expected) => frame === expected);
     if (match) pending.seen.add(match);
     if (pending.expected.every((prefix) => pending.seen.has(prefix))) {
       waiter.current = null; clearTimeout(pending.timer); pending.resolve();
@@ -83,11 +108,14 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.getItem(KEY).then((raw) => {
       if (raw) {
         const data = JSON.parse(raw) as Saved;
-        if (Array.isArray(data.tasks)) { savedRef.current = data; setSaved(data); }
+        if (Array.isArray(data.tasks)) {
+          const migrated = { ...emptySaved, ...data, tasks: data.tasks.map((task: Task & { minutes?: number }) => ({ ...task, timeSpentSeconds: task.timeSpentSeconds || 0 })) };
+          savedRef.current = migrated; setSaved(migrated);
+        }
       }
       hydrated.current = true;
       if (ready.current && savedRef.current.deviceId && shouldReconnect.current) connectRef.current(savedRef.current.deviceId);
-    }).catch((error) => log(`Storage: ${String(error)}`));
+    }).catch((error) => { hydrated.current = true; log(`Storage: ${String(error)}`); });
     const discovered = BleManager.onDiscoverPeripheral((item) => {
       if (!item.name?.startsWith('Toki Link')) return;
       setFound((current) => current.some((known) => known.id === item.id) ? current : [...current, { id: item.id, name: item.name || 'Toki Link' }]);
@@ -149,7 +177,7 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
       await response;
     } catch (error) { response.catch(() => {}); cancelWaiter(String(error)); throw error; }
   }
-  async function refresh() { await exchange('R', ['V:', 'F:']); }
+  async function refresh() { await exchange('R', ['K:R']); }
   async function connect(id: string) {
     if (connecting.current || connectedId.current === id) return;
     connecting.current = true; setBusy(true); setStatus('Connecting');
@@ -162,17 +190,17 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
       await BleManager.retrieveServices(id);
       await BleManager.startNotification(id, SERVICE, EVENT);
       const info = decode(await BleManager.read(id, SERVICE, INFO));
-      if (info !== 'TOKI/2') throw new Error(`Toki firmware ${info} needs protocol 2`);
+      if (info !== 'TOKI/3') { shouldReconnect.current = false; throw new Error(`Install Toki firmware 3 to use this app (device: ${info}).`); }
       const challenge = nonce();
-      await exchange(`H:${challenge}`, [`A:${challenge}:2`]);
+      await exchange(`H:${challenge}`, [`A:${challenge}:3`]);
       await refresh();
       patchSaved((current) => ({ ...current, deviceId: id }));
       shouldReconnect.current = true; setStatus('Connected'); log('Handshake verified');
     } catch (error) {
       setStatus(`Connection failed: ${String(error)}`); log(String(error));
       cancelWaiter('Connection failed');
-      try { await BleManager.disconnect(id); } catch { /* Link may already be closed. */ }
       connectedId.current = null;
+      try { await BleManager.disconnect(id); } catch { /* Link may already be closed. */ }
     } finally { connecting.current = false; setBusy(false); }
   }
   useEffect(() => { connectRef.current = connect; });
@@ -183,14 +211,19 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
     connectedId.current = null; setStatus('Offline');
   }
   async function action(command: string, ack: string) {
+    if (operation.current) throw new Error('Toki is syncing. Try again in a moment.');
+    operation.current = true;
     setBusy(true);
     try { await exchange(command, [ack]); await refresh(); }
     catch (error) { log(`Action failed: ${String(error)}`); throw error; }
-    finally { setBusy(false); }
+    finally { operation.current = false; setBusy(false); }
   }
   async function sync() {
     if (status !== 'Connected') throw new Error('Connect Toki first');
-    if (['H', 'W', 'R', 'B'].includes(deviceRef.current.phase)) throw new Error('Finish the current session first');
+    if (operation.current) throw new Error('Toki is busy. Try again in a moment.');
+    if (deviceRef.current.phase === 'R') throw new Error('Finish the current task first');
+    operation.current = true;
+    setSyncNotice('Syncing…');
     setBusy(true);
     try {
       await refresh();
@@ -200,27 +233,70 @@ export function TokiProvider({ children }: { children: React.ReactNode }) {
       await exchange(`B:${revision}:${selected.length}`, [`K:B:${revision}`]);
       for (let slot = 0; slot < selected.length; ++slot) {
         const task = selected[slot];
-        await exchange(`T:${slot}:${task.id}:${task.minutes}`, [`K:T:${slot}`]);
+        await exchange(`T:${slot}:${task.id}:0`, [`K:T:${slot}`]);
+        await exchange(`S:${slot}:${Math.floor(task.timeSpentSeconds)}`, [`K:S:${slot}`]);
         const title = deviceTitle(task.title);
         for (let part = 0; part * 8 < title.length; ++part)
           await exchange(`N:${slot}:${part}:${title.slice(part * 8, part * 8 + 8)}`, [`K:N:${slot}:${part}`]);
       }
       await exchange(`E:${revision}`, [`K:E:${revision}`]);
-      patchSaved((current) => ({ ...current, revision, syncedIds: selected.map((task) => task.id) }));
-      await refresh(); log(`${selected.length} tasks stored on Toki`);
-    } finally { setBusy(false); }
+      patchSaved((current) => ({ ...current, revision, syncedIds: selected.map((task) => task.id), syncedSignature: queueSignature(selected) }));
+      patchDevice({ revision, count: selected.length, selected: 0, doneMask: 0, phase: 'I' });
+      setSyncNotice('Up to date');
+      log(`${selected.length} tasks stored on Toki`);
+      // K:E is sent only after the device commits the queue to nonvolatile storage.
+      // A dropped follow-up state notification must not turn a successful sync into an error.
+      try { await refresh(); } catch (error) { log(`Saved on Toki; readback interrupted: ${String(error)}`); }
+    } catch (error) { setSyncNotice(`Sync paused: ${String(error).replace(/^Error: /, '')}`); throw error; }
+    finally { operation.current = false; setBusy(false); }
   }
-  function addTask(title: string, minutes: 5 | 10 | 15, priority: 1 | 2 | 3) {
+  function addTask(title: string) {
     if (!title.trim()) return;
-    patchSaved((current) => ({ ...current, tasks: [...current.tasks, newTask(title, minutes, priority, Math.max(0, ...current.tasks.map((task) => task.order)) + 1)] }));
+    patchSaved((current) => ({ ...current, tasks: [...current.tasks, newTask(title, Math.max(0, ...current.tasks.map((task) => task.order)) + 1)] }));
   }
-  function updateTask(id: string, changes: Partial<Pick<Task, 'priority' | 'minutes' | 'title' | 'order'>>) {
+  function updateTask(id: string, changes: Partial<Pick<Task, 'priority' | 'title' | 'order'>>) {
     patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === id ? { ...task, ...changes } : task) }));
+  }
+  function moveTask(id: string, direction: -1 | 1) {
+    patchSaved((current) => {
+      const ordered = sortTasks(current.tasks);
+      const index = ordered.findIndex((task) => task.id === id);
+      const other = index + direction;
+      if (index < 0 || other < 0 || other >= ordered.length) return current;
+      const first = ordered[index], second = ordered[other];
+      return { ...current, tasks: current.tasks.map((task) => task.id === first.id ? { ...task, order: second.order } : task.id === second.id ? { ...task, order: first.order } : task) };
+    });
   }
   function completeLocal(id: string) {
     patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === id ? { ...task, completedAt: Date.now() } : task) }));
   }
-  return <TokiContext.Provider value={{ saved, device, status, found, busy, logs, addTask, updateTask, completeLocal, scan, connect, disconnect, sync, action, refresh }}>{children}</TokiContext.Provider>;
+  function reorderTasks(ids: string[]) {
+    patchSaved((current) => ({ ...current, tasks: current.tasks.map((task) => ids.includes(task.id) ? { ...task, order: ids.indexOf(task.id), priority: 2 } : task) }));
+  }
+  function sendNext(id: string) {
+    updateTask(id, { order: Math.min(0, ...savedRef.current.tasks.map((task) => task.order)) - 1 });
+  }
+  useEffect(() => { syncRef.current = sync; });
+  useEffect(() => {
+    if (status !== 'Connected' || device.phase === 'R' || device.otaName || busy) return;
+    const top = sortTasks(saved.tasks).slice(0, 4);
+    const key = queueSignature(top);
+    const localMatches = key === saved.syncedSignature;
+    const deviceMatches = device.revision === saved.revision && device.count === top.length;
+    if (localMatches && deviceMatches) { autoSyncKey.current = ''; return; }
+    if (autoSyncKey.current === key) return;
+    const timer = setTimeout(() => { autoSyncKey.current = key; syncRef.current().catch((error) => log(`Automatic sync paused: ${String(error)}`)); }, 800);
+    return () => clearTimeout(timer);
+  }, [saved.tasks, saved.syncedSignature, saved.revision, device.phase, device.revision, device.count, device.otaName, status, busy, log]);
+  useEffect(() => {
+    if (status !== 'Connected' || !connectedId.current) { patchDevice({ rssi: undefined }); return; }
+    const id = connectedId.current;
+    const sample = () => BleManager.readRSSI(id).then((rssi) => patchDevice({ rssi })).catch(() => {});
+    void sample();
+    const timer = setInterval(sample, 5000);
+    return () => clearInterval(timer);
+  }, [status, patchDevice]);
+  return <TokiContext.Provider value={{ saved, device, status, found, busy, logs, syncNotice, addTask, updateTask, moveTask, reorderTasks, sendNext, completeLocal, scan, connect, disconnect, sync, action, refresh }}>{children}</TokiContext.Provider>;
 }
 
 export function useToki() {

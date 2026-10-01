@@ -1,3 +1,5 @@
+> Historical protocol 2 documentation. Use [protocol 3](TOKI_V3.md) for current firmware and app.
+
 # Toki working prototype · protocol 2
 
 The object runs on an ESP32 powered separately from the phone. The phone app talks directly to it over BLE. No phone cable or extra BLE module is used. The ESP32 keeps the last four tasks in nonvolatile memory, and its touch controls and timer continue without the app. The app keeps the longer task list on the phone. Wi-Fi is not needed for this build; the Device tab shows live BLE acknowledgements and state, while USB serial at 115200 remains available for bench debugging.
